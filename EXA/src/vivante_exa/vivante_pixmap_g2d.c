@@ -25,13 +25,11 @@
 *
 *****************************************************************************/
 
-
-#include "vivante_exa.h"
-
+#include "vivante_common.h"
+#include "vivante_exa_g2d.h"
 #include "vivante.h"
-
 #include "vivante_priv.h"
-
+#include "imx_g2d.h"
 
 #ifdef HAVE_G2D
 /**
@@ -42,6 +40,7 @@
  * @return private vivpixmap
  */
 
+
 void *
 G2dVivCreatePixmap(ScreenPtr pScreen, int size, int align) {
     TRACE_ENTER();
@@ -50,6 +49,7 @@ G2dVivCreatePixmap(ScreenPtr pScreen, int size, int align) {
     if (!pVivPix) {
         TRACE_EXIT(NULL);
     }
+    memset(pVivPix, 0, sizeof (Viv2DPixmap));
     IGNORE(align);
     IGNORE(size);
     pVivPix->mVidMemInfo = NULL;
@@ -58,7 +58,7 @@ G2dVivCreatePixmap(ScreenPtr pScreen, int size, int align) {
     pVivPix->mSwAnyWay = FALSE;
     pVivPix->mNextGpuBusyPixmap = NULL;
     pVivPix->mRef = 0;
-    pVivPix->fdToPixmap = 0;
+
     TRACE_EXIT(pVivPix);
 }
 
@@ -72,9 +72,17 @@ G2dVivDestroyPixmap(ScreenPtr pScreen, void *dPriv) {
     TRACE_ENTER();
     Viv2DPixmapPtr priv = (Viv2DPixmapPtr) dPriv;
     VivPtr pViv = VIVPTR_FROM_SCREEN(pScreen);
-    if (priv && (priv->mVidMemInfo)) {
 
-        if (!DestroySurface(&pViv->mGrCtx, priv)) {
+    if (priv && (priv->mVidMemInfo)) {
+#ifdef HAVE_VIVANTE_2D
+        if(pViv->mGrCtx.mPreferredAllocator == VIVGAL2D) {
+			if (!DestroySurface(&pViv->mGrCtx, priv)) {
+	            TRACE_ERROR("Error on destroying the surface\n");
+	        }
+		}
+		else
+#endif
+        if (!G2DDestroySurface(&pViv->mGrCtx, priv)) {
             TRACE_ERROR("Error on destroying the surface\n");
         }
         /*Removing the container*/
@@ -120,8 +128,6 @@ G2dVivPixmapIsOffscreen(PixmapPtr pPixmap) {
 
     TRACE_EXIT(ret);
 }
-
-extern gctBOOL EXA_G2D;
 
 /**
  * Returning a pixmap with non-NULL devPrivate.ptr implies a pixmap which is
@@ -172,12 +178,9 @@ G2dVivModifyPixmapHeader(PixmapPtr pPixmap, int width, int height,
 
     isChanged = (!pVivPix->mVidMemInfo || prev_h != height || prev_w != width || (prev_bpp != bitsPerPixel && bitsPerPixel > 16));
 
-
     /* What is the start of screen (and offscreen) memory and its size. */
 
-    CARD8* screenMemoryBegin =
-
-    (CARD8*) (pViv->mFakeExa.mExaDriver->memoryBase);
+    CARD8* screenMemoryBegin = (CARD8*) (pViv->mFakeExa.mExaDriver->memoryBase);
 
     CARD8* screenMemoryEnd =screenMemoryBegin + pViv->mFakeExa.mExaDriver->memorySize;
 
@@ -191,10 +194,8 @@ G2dVivModifyPixmapHeader(PixmapPtr pPixmap, int width, int height,
         /* Store GPU address. */
         const unsigned long physical = pViv->mFB.memGpuBase + offset;
 
-        pVivPix->fdToPixmap = 0;
         /* reserved buffers size is greater than current pixmap used. TODO: move shadow buffer out */
-        if (!WrapSurface(pPixmap, pPixData, physical, pVivPix, pViv->mFakeExa.mExaDriver->memorySize/2)) {
-
+        if (!G2DWrapSurface(pPixmap, pPixData, physical, pVivPix, pViv->mFakeExa.mExaDriver->memorySize/2)) {
             TRACE_ERROR("Frame Buffer Wrapping ERROR\n");
             TRACE_EXIT(FALSE);
         }
@@ -203,12 +204,10 @@ G2dVivModifyPixmapHeader(PixmapPtr pPixmap, int width, int height,
         TRACE_EXIT(TRUE);
 
     }
-#ifdef ENABLE_VIVANTE_DRI3
-    else if (pPixData && bitsPerPixel > 8 && EXA_G2D) {
+    else if (pPixData && bitsPerPixel > 8 && pViv->mGrCtx.mPreferredAllocator == IMXG2D) {
         struct g2d_buf *buf;
 
         buf = g2d_buf_from_virt_addr(pPixData, width*height*(bitsPerPixel/8));
-        pVivPix->fdToPixmap = 0;
         if(!buf){
             pPixmap->devPrivate.ptr = pPixData;
 
@@ -217,14 +216,12 @@ G2dVivModifyPixmapHeader(PixmapPtr pPixmap, int width, int height,
 
             TRACE_EXIT(FALSE);
         }
-
-        if (!WrapSurface(pPixmap, pPixData, buf->buf_paddr, pVivPix, width*height*(bitsPerPixel/8))) {
+        if (!G2DWrapSurface(pPixmap, pPixData, buf->buf_paddr, pVivPix, width*height*(bitsPerPixel/8))) {
             TRACE_ERROR("Frame Buffer Wrapping ERROR\n");
 
             TRACE_EXIT(FALSE);
         }
     }
-#endif
     else if (pPixData) {
 
         TRACE_ERROR("NO ACCERELATION\n");
@@ -234,70 +231,57 @@ G2dVivModifyPixmapHeader(PixmapPtr pPixmap, int width, int height,
         pPixmap->devPrivate.ptr = pPixData;
 
         pPixmap->devKind = devKind;
-        pVivPix->fdToPixmap = 0;
-        TRACE_EXA("%s:%d VivPixmap:%p",__FUNCTION__,__LINE__,pVivPix);
-        //VIV2DCacheOperation(&pViv->mGrCtx, pVivPix,FLUSH);
-        //VIV2DGPUBlitComplete(&pViv->mGrCtx, TRUE);
+
         /*we never want to see this again*/
-        if (!DestroySurface(&pViv->mGrCtx, pVivPix)) {
+        if (!G2DDestroySurface(&pViv->mGrCtx, pVivPix)) {
 
             TRACE_ERROR("ERROR : DestroySurface\n");
         }
-
-        TRACE_EXA("%s:%d VivPixmap:%p",__FUNCTION__,__LINE__,pVivPix);
         pVivPix->mVidMemInfo = NULL;
         TRACE_EXIT(FALSE);
 
     } else {
 
         if (isChanged) {
-
-#ifndef ENABLE_VIVANTE_DRI3
-        pVivPix->fdToPixmap = 0;
-#endif
-
-        if (pVivPix->fdToPixmap) {
-            if (!CreateSurfaceWithFd(&pViv->mGrCtx, pPixmap, pVivPix, pVivPix->fdToPixmap)) {
-                TRACE_ERROR("ERROR : Creating the surface\n");
-                fprintf(stderr,"CreateSurface failed\n");
-                TRACE_EXIT(FALSE);
-            }
-            pVivPix->fdToPixmap = 0;
-        } else {
-
-            if (isChanged) {
-
+#ifdef HAVE_VIVANTE_2D
+            if(pViv->mGrCtx.mPreferredAllocator == VIVGAL2D) {
                 if ( !ReUseSurface(&pViv->mGrCtx, pPixmap, pVivPix) )
                 {
-
                     if (!DestroySurface(&pViv->mGrCtx, pVivPix)) {
                         TRACE_ERROR("ERROR : Destroying the surface\n");
-                        fprintf(stderr,"Destroy surface failed\n");
                         TRACE_EXIT(FALSE);
                     }
 
                     if (!CreateSurface(&pViv->mGrCtx, pPixmap, pVivPix)) {
                         TRACE_ERROR("ERROR : Creating the surface\n");
-                        fprintf(stderr,"CreateSurface failed\n");
                         TRACE_EXIT(FALSE);
                     }
                 }
             }
-        }
+            else
+#endif
+            if ( !G2DReUseSurface(&pViv->mGrCtx, pPixmap, pVivPix) )
+            {
+                if (!G2DDestroySurface(&pViv->mGrCtx, pVivPix)) {
+                    TRACE_ERROR("ERROR : Destroying the surface\n");
+                    TRACE_EXIT(FALSE);
+                }
 
-        pPixmap->devKind = GetStride(pVivPix);
+                if (!G2DCreateSurface(&pViv->mGrCtx, pPixmap, pVivPix, pVivPix->pixmapfd)) {
+                    TRACE_ERROR("ERROR : Creating the surface\n");
+                    TRACE_EXIT(FALSE);
+                }
+            }
 
-        /* Clean the new surface with black color in case the window gets scrambled image when the window is resized */
-        if ( (pPixmap->drawable.width * pPixmap->drawable.height) > IMX_EXA_MIN_AREA_CLEAN )
-        {
-            CleanSurfaceBySW(&pViv->mGrCtx, pPixmap, pVivPix);
-        }
-
-
+            pPixmap->devKind = G2DGetStride(pVivPix);
+            /* Clean the new surface with black color in case the window gets scrambled image when the window is resized */
+            if ( (pPixmap->drawable.width * pPixmap->drawable.height) > IMX_EXA_MIN_AREA_CLEAN )
+            {
+                G2DCleanSurfaceBySW(&pViv->mGrCtx, pPixmap, pVivPix);
+            }
         }
 
     }
-
     TRACE_EXIT(TRUE);
 }
 
@@ -338,12 +322,12 @@ Bool
 G2dVivPrepareAccess(PixmapPtr pPix, int index) {
     TRACE_ENTER();
     Viv2DPixmapPtr pVivPix = exaGetPixmapDriverPrivate(pPix);
+
     VivPtr pViv = VIVPTR_FROM_PIXMAP(pPix);
     VIV2DBLITINFOPTR pBlt = &pViv->mGrCtx.mBlitInfo;
     VIVGPUPtr pGpuCtx = (VIVGPUPtr)(pViv->mGrCtx.mGpu);
-
     if (pVivPix->mRef == 0) {
-        pPix->devPrivate.ptr = MapSurface(pVivPix);
+        pPix->devPrivate.ptr = G2DMapSurface(pVivPix);
     }
 
     pVivPix->mRef++;
