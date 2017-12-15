@@ -56,7 +56,6 @@ VivCreatePixmap(ScreenPtr pScreen, int size, int align) {
     vivpixmap->mSwAnyWay = FALSE;
     vivpixmap->mNextGpuBusyPixmap = NULL;
     vivpixmap->mRef = 0;
-    vivpixmap->fdToPixmap = 0;
     TRACE_EXIT(vivpixmap);
 }
 
@@ -186,10 +185,8 @@ VivModifyPixmapHeader(PixmapPtr pPixmap, int width, int height,
         /* Store GPU address. */
         const unsigned long physical = pViv->mFB.memGpuBase + offset;
 
-        vivPixmap->fdToPixmap = 0;
         /* reserved buffers size is greater than current pixmap used. TODO: move shadow buffer out */
         if (!WrapSurface(pPixmap, pPixData, physical, vivPixmap, pViv->mFakeExa.mExaDriver->memorySize/2)) {
-
             TRACE_ERROR("Frame Buffer Wrapping ERROR\n");
             TRACE_EXIT(FALSE);
         }
@@ -206,7 +203,6 @@ VivModifyPixmapHeader(PixmapPtr pPixmap, int width, int height,
 
         pPixmap->devKind = devKind;
 
-        vivPixmap->fdToPixmap = 0;
         //VIV2DCacheOperation(&pViv->mGrCtx, vivPixmap,FLUSH);
         //VIV2DGPUBlitComplete(&pViv->mGrCtx, TRUE);
         /*we never want to see this again*/
@@ -220,44 +216,36 @@ VivModifyPixmapHeader(PixmapPtr pPixmap, int width, int height,
 
     } else {
 
-        if (vivPixmap->fdToPixmap) {
-            if (!CreateSurfaceWithFd(&pViv->mGrCtx, pPixmap, vivPixmap, vivPixmap->fdToPixmap)) {
-                TRACE_ERROR("ERROR : Creating the surface\n");
-                fprintf(stderr,"CreateSurface failed\n");
-                TRACE_EXIT(FALSE);
-            }
-            vivPixmap->fdToPixmap = 0;
-        } else {
+        if (isChanged) {
 
-            if (isChanged) {
+            if ( !ReUseSurface(&pViv->mGrCtx, pPixmap, vivPixmap) )
+            {
 
-                if ( !ReUseSurface(&pViv->mGrCtx, pPixmap, vivPixmap) )
-                {
+                if (!DestroySurface(&pViv->mGrCtx, vivPixmap)) {
+                    TRACE_ERROR("ERROR : Destroying the surface\n");
+                    fprintf(stderr,"Destroy surface failed\n");
+                    TRACE_EXIT(FALSE);
+                }
 
-                    if (!DestroySurface(&pViv->mGrCtx, vivPixmap)) {
-                        TRACE_ERROR("ERROR : Destroying the surface\n");
-                        fprintf(stderr,"Destroy surface failed\n");
-                        TRACE_EXIT(FALSE);
-                    }
-
-                    if (!CreateSurface(&pViv->mGrCtx, pPixmap, vivPixmap)) {
-                        TRACE_ERROR("ERROR : Creating the surface\n");
-                        fprintf(stderr,"CreateSurface failed\n");
-                        TRACE_EXIT(FALSE);
-                    }
+                if (!CreateSurface(&pViv->mGrCtx, pPixmap, vivPixmap)) {
+                    TRACE_ERROR("ERROR : Creating the surface\n");
+                    fprintf(stderr,"CreateSurface failed\n");
+                    TRACE_EXIT(FALSE);
                 }
             }
-        }
 
-        pPixmap->devKind = GetStride(vivPixmap);
+            pPixmap->devKind = GetStride(vivPixmap);
 
-        /* Clean the new surface with black color in case the window gets scrambled image when the window is resized */
-        if ( (pPixmap->drawable.width * pPixmap->drawable.height) > IMX_EXA_MIN_AREA_CLEAN )
-        {
-            CleanSurfaceBySW(&pViv->mGrCtx, pPixmap, vivPixmap);
+            /* Clean the new surface with black color in case the window gets scrambled image when the window is resized */
+            if ( (pPixmap->drawable.width * pPixmap->drawable.height) > IMX_EXA_MIN_AREA_CLEAN )
+            {
+                CleanSurfaceBySW(&pViv->mGrCtx, pPixmap, vivPixmap);
+            }
+
         }
 
     }
+
     TRACE_EXIT(TRUE);
 }
 
@@ -348,4 +336,5 @@ VivFinishAccess(PixmapPtr pPix, int index) {
     vivpixmap->mRef--;
     TRACE_EXIT();
 }
+
 

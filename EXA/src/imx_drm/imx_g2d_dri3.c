@@ -124,7 +124,7 @@ static int imx_g2d_dri3_fd_from_pixmap(ScreenPtr pScreen, PixmapPtr pPixmap,
     Viv2DPixmapPtr pVivPix = exaGetPixmapDriverPrivate(pPixmap);
     
     if (!pVivPix || !pVivPix->mVidMemInfo ) {
-		return BadMatch;
+		return -1;
     }
     surf = (GenericSurfacePtr)pVivPix->mVidMemInfo;
 	
@@ -133,7 +133,7 @@ static int imx_g2d_dri3_fd_from_pixmap(ScreenPtr pScreen, PixmapPtr pPixmap,
 
 	fd = g2d_buf_export_fd(surf->g2dbuf);
     if( fd < 0) {
-        return BadMatch;
+        return -1;
     }
 	*stride = pPixmap->devKind;
 	*size = surf->g2dbuf->buf_size;

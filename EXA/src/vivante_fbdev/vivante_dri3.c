@@ -139,7 +139,7 @@ static int vivante_dri3_fd_from_pixmap(ScreenPtr pScreen, PixmapPtr pPixmap,
     if (pPixmap->devKind > UINT16_MAX)
         return -1;
 
-    fd = dup(surf->fd);
+    fd = surf->fd;
     if( fd < 0) {
         return BadMatch;
     }
